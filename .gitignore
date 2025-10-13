@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Large data files
+*.db
+
+# Binary files
+*.dylib
+*.so
+*.dll
+
+# Model files (if you want to exclude them)
+model/weights.bin
+
+# MacOS system files
+.DS_Store
