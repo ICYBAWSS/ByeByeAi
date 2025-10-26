@@ -55,46 +55,6 @@ function calculateSentenceComplexity(text) {
   return [complexityScore, diversityScore];
 }
 
-// Calculate text features
-function extractFeatures(text) {
-  // Text length
-  const text_length = text.length;
-  
-  // Word count
-  const words = text.trim().split(/\s+/).filter(w => w.length > 0);
-  const word_count = words.length;
-  
-  // Average word length
-  const avg_word_length = words.reduce((sum, word) => sum + word.length, 0) / word_count;
-  
-  // Number of sentences
-  const num_sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0).length;
-  
-  // Punctuation density
-  const punctuation = text.match(/[.,!?;:'"()-]/g) || [];
-  const punctuation_density = punctuation.length / text_length;
-  
-  // Readability score (Flesch Reading Ease approximation)
-  const syllables = words.reduce((sum, word) => sum + countSyllables(word), 0);
-  const readability_score = 206.835 - 1.015 * (word_count / num_sentences) - 84.6 * (syllables / word_count);
-  
-  // Calculate additional features
-  const phrase_repetition = calculatePhraseRepetition(text);
-  const [sentence_complexity, sentence_diversity] = calculateSentenceComplexity(text);
-  
-  return {
-    text_length,
-    word_count,
-    avg_word_length: parseFloat(avg_word_length.toFixed(2)),
-    num_sentences,
-    punctuation_density: parseFloat(punctuation_density.toFixed(4)),
-    readability_score: Math.max(0, Math.min(100, parseFloat(readability_score.toFixed(2)))),
-    phrase_repetition: parseFloat(phrase_repetition.toFixed(4)),
-    sentence_complexity: parseFloat(sentence_complexity.toFixed(4)),
-    sentence_diversity: parseFloat(sentence_diversity.toFixed(4))
-  };
-}
-
 // Simple syllable counter
 function countSyllables(word) {
   word = word.toLowerCase();
@@ -105,83 +65,187 @@ function countSyllables(word) {
   return matches ? matches.length : 1;
 }
 
-// Load model
-async function loadModel() {
-  const model = await tf.loadLayersModel('file://./model/model.json');
-  const normData = JSON.parse(fs.readFileSync('./model/normalization.json', 'utf8'));
+// Calculate text features with log-transformed length features
+function extractFeatures(text) {
+  // Text length (log-transformed)
+  const text_length = Math.log1p(text.length);
+  
+  // Word count (log-transformed)
+  const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+  const word_count_log = Math.log1p(words.length);
+  
+  // Average word length
+  const avg_word_length = words.reduce((sum, word) => sum + word.length, 0) / words.length;
+  
+  // Number of sentences (log-transformed)
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  const num_sentences_log = Math.log1p(sentences.length);
+  
+  // Punctuation density
+  const punctuation = text.match(/[.,!?;:'"()-]/g) || [];
+  const punctuation_density = punctuation.length / text.length;
+  
+  // Readability score (Flesch Reading Ease approximation)
+  const syllables = words.reduce((sum, word) => sum + countSyllables(word), 0);
+  const readability_score = 206.835 - 1.015 * (words.length / sentences.length) - 84.6 * (syllables / words.length);
+  
+  // Calculate additional features
+  const phrase_repetition = calculatePhraseRepetition(text);
+  const [sentence_complexity, sentence_diversity] = calculateSentenceComplexity(text);
+  
   return {
-    model,
-    mean: tf.tensor1d(normData.mean),
-    std: tf.tensor1d(normData.std)
+    text_length_log: text_length,
+    word_count_log: word_count_log,
+    avg_word_length: parseFloat(avg_word_length.toFixed(2)),
+    num_sentences_log: num_sentences_log,
+    punctuation_density: parseFloat(punctuation_density.toFixed(4)),
+    readability_score: Math.max(0, Math.min(100, parseFloat(readability_score.toFixed(2)))),
+    phrase_repetition: parseFloat(phrase_repetition.toFixed(4)),
+    sentence_complexity: parseFloat(sentence_complexity.toFixed(4)),
+    sentence_diversity: parseFloat(sentence_diversity.toFixed(4))
   };
 }
 
-// Predict function
-function predict(model, features, mean, std) {
-  const featureTensor = tf.tensor2d([features]);
-  const normalized = featureTensor.sub(mean).div(std.add(1e-7));
-  const prediction = model.predict(normalized);
-  const probability = prediction.dataSync()[0];
+// Log feature importance (to be called after model loading)
+function logFeatureImportance(weights, featureNames) {
+  console.log('\n─── Feature Importance ───');
+  const importance = featureNames.map((name, i) => ({
+    name,
+    weight: Math.abs(weights[i])
+  }));
   
-  featureTensor.dispose();
-  normalized.dispose();
-  prediction.dispose();
+  // Sort by absolute weight (descending)
+  importance.sort((a, b) => b.weight - a.weight);
   
-  return probability;
-}
-
-// Main
-async function main() {
-  console.log('Loading model...\n');
-  const { model, mean, std } = await loadModel();
-  console.log('✓ Model loaded successfully!\n');
-  
-  console.log('═══════════════════════════════════════');
-  console.log('     AI TEXT DETECTION TEST');
-  console.log('═══════════════════════════════════════\n');
-  
-  // Get text input
-  console.log('Paste your text below (press Enter twice when done):');
-  let text = '';
-  let emptyLines = 0;
-  
-  rl.on('line', (line) => {
-    if (line === '') {
-      emptyLines++;
-      if (emptyLines >= 2 || text.length > 0) {
-        rl.close();
-      }
-    } else {
-      emptyLines = 0;
-      text += line + '\n';
-    }
+  // Log top 10 features
+  importance.slice(0, 10).forEach((feat, i) => {
+    console.log(`${i + 1}. ${feat.name.padEnd(25)}: ${feat.weight.toFixed(6)}`);
   });
   
-  await new Promise(resolve => rl.on('close', resolve));
+  // Check if length features are dominating
+  const lengthFeatures = ['text_length_log', 'word_count_log', 'num_sentences_log'];
+  const top3LengthFeatures = importance
+    .slice(0, 3)
+    .filter(feat => lengthFeatures.includes(feat.name));
+    
+  if (top3LengthFeatures.length > 0) {
+    console.log('\n⚠️  Note: Length-related features are among the top predictors.');
+    console.log('   Consider collecting more diverse training data with balanced lengths.');
+  }
+}
+
+// Load normalization parameters
+function loadNormalizationParams(modelDir = './model') {
+  try {
+    const normData = JSON.parse(fs.readFileSync(`${modelDir}/normalization.json`, 'utf8'));
+    return { 
+      mean: tf.tensor1d(normData.mean), 
+      std: tf.tensor1d(normData.std), 
+      featureNames: normData.featureNames
+    };
+  } catch (error) {
+    console.error('Error loading normalization parameters:', error);
+    throw new Error('Failed to load model normalization parameters');
+  }
+}
+
+// Load model with L2 regularization and normalization parameters
+async function loadModel() {
+  try {
+    // Load the entire model from the saved files
+    const model = await tf.loadLayersModel('file://./model/model.json');
+    
+    // Load normalization parameters
+    const { mean, std, featureNames } = await loadNormalizationParams();
+    
+    return { model, mean, std, featureNames };
+  } catch (error) {
+    console.error('Error loading model:', error);
+    throw new Error('Failed to load model. Make sure to train the model first.');
+  }
+}
+
+// Predict function with proper feature scaling
+async function predict(model, features, mean, std) {
+  try {
+    // Ensure features are in the correct order
+    const featureArray = [
+      features.text_length_log,
+      features.word_count_log,
+      features.avg_word_length,
+      features.num_sentences_log,
+      features.punctuation_density,
+      features.readability_score,
+      features.phrase_repetition,
+      features.sentence_complexity,
+      features.sentence_diversity
+    ];
+
+    // Convert features to tensor and normalize
+    const inputTensor = tf.tensor2d([featureArray]);
+    const normalizedInput = inputTensor.sub(mean).div(std.add(1e-7));
+    
+    // Make prediction
+    const prediction = model.predict(normalizedInput);
+    const score = (await prediction.data())[0];
+    
+    // Clean up
+    inputTensor.dispose();
+    normalizedInput.dispose();
+    prediction.dispose();
+    
+    return score;
+  } catch (error) {
+    console.error('Error during prediction:', error);
+    return 0.5; // Return neutral score on error
+  }
+}
+
+// Main function
+async function main() {
+  console.log('═══════════════════════════════════════');
+  console.log('   AI Text Detector - Interactive Test');
+  console.log('═══════════════════════════════════════\n');
   
-  text = text.trim();
+  // Load model and normalization parameters
+  console.log('Loading model...');
+  const { model, mean, std, featureNames } = await loadModel();
+  console.log('✓ Model loaded successfully\n');
   
-  if (!text) {
-    console.log('No text provided. Exiting.');
+  // Get text input from user
+  const text = await question('Enter text to analyze (or "quit" to exit):\n> ');
+  
+  if (text.toLowerCase() === 'quit') {
+    console.log('Goodbye!');
+    rl.close();
     return;
   }
   
-  console.log('\nExtracting features...');
-  const textFeatures = extractFeatures(text);
+  if (!text || text.trim().length === 0) {
+    console.log('⚠️  Please enter some text to analyze.');
+    rl.close();
+    return;
+  }
   
   console.log('\n─── Extracted Features ───');
-  console.log(`Text Length: ${textFeatures.text_length}`);
-  console.log(`Word Count: ${textFeatures.word_count}`);
+  const textFeatures = extractFeatures(text);
+  
+  console.log(`Text Length (log): ${textFeatures.text_length_log.toFixed(4)}`);
+  console.log(`Word Count (log): ${textFeatures.word_count_log.toFixed(4)}`);
   console.log(`Avg Word Length: ${textFeatures.avg_word_length}`);
-  console.log(`Sentences: ${textFeatures.num_sentences}`);
+  console.log(`Num Sentences (log): ${textFeatures.num_sentences_log.toFixed(4)}`);
   console.log(`Punctuation Density: ${textFeatures.punctuation_density}`);
   console.log(`Readability Score: ${textFeatures.readability_score}`);
+  console.log(`Phrase Repetition: ${textFeatures.phrase_repetition}`);
+  console.log(`Sentence Complexity: ${textFeatures.sentence_complexity}`);
+  console.log(`Sentence Diversity: ${textFeatures.sentence_diversity}`);
   
+  // Features in the same order as the model expects
   const features = [
-    textFeatures.text_length,
-    textFeatures.word_count,
+    textFeatures.text_length_log,
+    textFeatures.word_count_log,
     textFeatures.avg_word_length,
-    textFeatures.num_sentences,
+    textFeatures.num_sentences_log,
     textFeatures.punctuation_density,
     textFeatures.readability_score,
     textFeatures.phrase_repetition,
@@ -193,14 +257,27 @@ async function main() {
   const meanArray = mean.arraySync();
   const stdArray = std.arraySync();
   
-  features.forEach((f, i) => {
-    const normalized = (f - meanArray[i]) / (stdArray[i] + 1e-7);
-    console.log(`Feature ${i}: ${f.toFixed(4)} -> ${normalized.toFixed(4)} (mean: ${meanArray[i].toFixed(2)}, std: ${stdArray[i].toFixed(2)})`);
+  // Log feature values with their normalized versions
+  featureNames.forEach((name, i) => {
+    const normalized = (features[i] - meanArray[i]) / (stdArray[i] + 1e-7);
+    console.log(`${name.padEnd(20)}: ${features[i].toFixed(4)} -> ${normalized.toFixed(4)} (mean: ${meanArray[i].toFixed(2)}, std: ${stdArray[i].toFixed(2)})`);
   });
+  
+  // Log feature importance
+  try {
+    // Get weights from the first dense layer (assuming it's the input layer)
+    const weights = model.layers[0].getWeights()[0].arraySync();
+    const avgWeights = weights[0].map((_, i) => 
+      Math.abs(weights.reduce((sum, w) => sum + Math.abs(w[i]), 0) / weights.length)
+    );
+    logFeatureImportance(avgWeights, featureNames);
+  } catch (e) {
+    console.log('\n⚠️  Could not calculate feature importance:', e.message);
+  }
   
   console.log('\nAnalyzing...\n');
   
-  const probability = predict(model, features, mean, std);
+  const probability = await predict(model, textFeatures, mean, std);
   
   console.log('═══════════════════════════════════════');
   console.log('         PREDICTION RESULT');
@@ -220,14 +297,20 @@ async function main() {
     console.log(`Confidence: ${confidence.toFixed(2)}%`);
     console.log(`AI Probability: ${(probability * 100).toFixed(2)}%`);
     
-    // Warning if text is very different from training data
-    if (textFeatures.word_count > 500 || textFeatures.num_sentences > 30) {
-      console.log('\n⚠️  WARNING: This text is much longer than training data');
-      console.log('   Training average: 309 words, 16 sentences');
-      console.log('   This may reduce accuracy.');
+    // Provide more nuanced length guidance
+    const wordCount = Math.exp(textFeatures.word_count_log) - 1;
+    const sentenceCount = Math.exp(textFeatures.num_sentences_log) - 1;
+    
+    if (wordCount > 500 || sentenceCount > 30) {
+      console.log('\nℹ️  Note: This is a longer text');
+      console.log('   The model uses log-scaled length features to better handle');
+      console.log('   varying text lengths, but extreme values may still affect accuracy.');
     }
   }
   console.log('═══════════════════════════════════════\n');
+  
+  // Clean up
+  rl.close();
 }
 
 main().catch(console.error);
