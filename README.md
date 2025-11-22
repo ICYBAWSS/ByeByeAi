@@ -2,7 +2,6 @@
 
 **🚧 Heavy Work in Progress**
 
-**What is this?**
 Browser extension to filter out the AI slop on LinkedIn. I got tired of reading ai copy and pastes, so I built this to filter all that.
 
 **Tech & Features**
