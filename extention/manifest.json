@@ -1,0 +1,31 @@
+{
+  "manifest_version": 2,
+  "name": "AI Post Highlighter for LinkedIn",
+  "version": "1.0",
+  "description": "Highlights AI-generated posts on LinkedIn",
+  "permissions": [
+    "activeTab", 
+    "*://*.linkedin.com/*",
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://*.linkedin.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "ai-highlighter@example.com"
+    }
+  },
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icon48.png",
+      "96": "icon96.png"
+    }
+  }
+}

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>AI Post Highlighter</title>
+    <style>
+        body {
+            width: 250px;
+            padding: 15px;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+        }
+        .setting-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .slider-container {
+            margin: 10px 0;
+        }
+        .slider-value {
+            display: inline-block;
+            width: 30px;
+            text-align: right;
+            margin-left: 10px;
+        }
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+            margin-left: 10px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #2196F3;
+        }
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+        .flex {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        #saveStatus {
+            color: #4CAF50;
+            margin-top: 10px;
+            font-size: 12px;
+            text-align: center;
+            display: none;
+        }
+        .divider {
+            border-top: 1px solid #eee;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h2 style="margin: 0 0 15px 0; font-size: 16px;">AI Post Highlighter</h2>
+    
+    <div class="setting-group">
+        <label for="hideThreshold">Hide AI posts above confidence:</label>
+        <div class="slider-container">
+            <input type="range" min="0" max="100" value="70" class="slider" id="hideThreshold">
+            <span class="slider-value" id="thresholdValue">70%</span>
+        </div>
+    </div>
+    
+    <div class="divider"></div>
+    
+    <div class="setting-group">
+        <div class="flex">
+            <label for="enableHighlighting">Enable color coding:</label>
+            <label class="switch">
+                <input type="checkbox" id="enableHighlighting" checked>
+                <span class="slider round"></span>
+            </label>
+        </div>
+    </div>
+    
+    <div class="divider"></div>
+    
+    <div class="setting-group">
+        <div class="flex">
+            <label for="enableAnimations">Enable dust animations:</label>
+            <label class="switch">
+                <input type="checkbox" id="enableAnimations" checked>
+                <span class="slider round"></span>
+            </label>
+        </div>
+    </div>
+    
+    <div id="saveStatus">Settings saved!</div>
+    
+    <script src="popup.js"></script>
+</body>
+</html>

@@ -2,18 +2,12 @@
   "name": "text-classifier",
   "version": "1.0.0",
   "type": "module",
-  "description": "AI vs Human text classifier using TensorFlow.js",
-  "main": "train.js",
   "scripts": {
     "train": "node train.js",
-    "predict": "node predict.js",
-    "test": "node test.js",
-    "diagnose": "node diagnose.js",
-    "check": "node check-model.js",
-    "check-data": "node check-data.js"
+    "test": "node test.js"
   },
   "dependencies": {
-    "@tensorflow/tfjs-node": "^4.17.0",
-    "better-sqlite3": "^9.2.2"
+    "@tensorflow/tfjs-node": "^4.11.0",
+    "better-sqlite3": "^9.1.1"
   }
 }

@@ -1,9 +1,220 @@
-// train.js - Run this once to train and save the model
+// train-academic.js - Training with research-based features
 import * as tf from '@tensorflow/tfjs-node';
 import Database from 'better-sqlite3';
 import fs from 'fs';
 
-// Load data from SQLite database
+// [Include all the feature extraction functions from previous artifact]
+// calculatePerplexity, calculateBurstiness, calculateEntropy, etc.
+
+function calculatePerplexity(text) {
+  const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+  if (words.length < 2) return { perplexity: 0, normalizedPerplexity: 0 };
+  
+  const bigramFreq = {};
+  const unigramFreq = {};
+  
+  for (let i = 0; i < words.length - 1; i++) {
+    const bigram = `${words[i]} ${words[i + 1]}`;
+    const unigram = words[i];
+    bigramFreq[bigram] = (bigramFreq[bigram] || 0) + 1;
+    unigramFreq[unigram] = (unigramFreq[unigram] || 0) + 1;
+  }
+  
+  let logProb = 0;
+  for (let i = 0; i < words.length - 1; i++) {
+    const bigram = `${words[i]} ${words[i + 1]}`;
+    const unigram = words[i];
+    const bigramCount = bigramFreq[bigram] || 0;
+    const unigramCount = unigramFreq[unigram] || 1;
+    const prob = (bigramCount + 1) / (unigramCount + Object.keys(unigramFreq).length);
+    logProb += Math.log2(prob);
+  }
+  
+  const perplexity = Math.pow(2, -logProb / (words.length - 1));
+  return { perplexity, normalizedPerplexity: perplexity / words.length };
+}
+
+function calculateBurstiness(text) {
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  if (sentences.length < 2) return { burstiness: 0, sentenceLengthVariance: 0 };
+  
+  const sentLengths = sentences.map(s => s.trim().split(/\s+/).length);
+  const mean = sentLengths.reduce((a, b) => a + b, 0) / sentLengths.length;
+  const variance = sentLengths.reduce((sum, len) => sum + Math.pow(len - mean, 2), 0) / sentLengths.length;
+  const stdDev = Math.sqrt(variance);
+  const burstiness = (stdDev - mean) / (stdDev + mean);
+  
+  return { 
+    burstiness: Math.max(-1, Math.min(1, burstiness)),
+    sentenceLengthVariance: variance 
+  };
+}
+
+function calculateEntropy(text) {
+  const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+  if (words.length === 0) return { entropy: 0, normalizedEntropy: 0 };
+  
+  const freq = {};
+  words.forEach(word => freq[word] = (freq[word] || 0) + 1);
+  
+  let entropy = 0;
+  Object.values(freq).forEach(count => {
+    const prob = count / words.length;
+    entropy -= prob * Math.log2(prob);
+  });
+  
+  const maxEntropy = Math.log2(Object.keys(freq).length);
+  const normalizedEntropy = maxEntropy > 0 ? entropy / maxEntropy : 0;
+  
+  return { entropy, normalizedEntropy };
+}
+
+function calculateLexicalDiversity(text) {
+  const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+  if (words.length === 0) return { ttr: 0, mtld: 0, vocdD: 0 };
+  
+  const uniqueWords = new Set(words);
+  const ttr = uniqueWords.size / words.length;
+  
+  let mtld = 0;
+  const windowSize = 50;
+  if (words.length >= windowSize) {
+    for (let i = 0; i <= words.length - windowSize; i++) {
+      const window = words.slice(i, i + windowSize);
+      const uniqueInWindow = new Set(window);
+      mtld += uniqueInWindow.size / windowSize;
+    }
+    mtld /= (words.length - windowSize + 1);
+  } else {
+    mtld = ttr;
+  }
+  
+  const vocdD = uniqueWords.size / Math.sqrt(words.length);
+  
+  return { ttr, mtld, vocdD };
+}
+
+function analyzeNGrams(text, n = 3) {
+  const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+  if (words.length < n) return { ngramRepetition: 0 };
+  
+  const ngrams = {};
+  for (let i = 0; i <= words.length - n; i++) {
+    const ngram = words.slice(i, i + n).join(' ');
+    ngrams[ngram] = (ngrams[ngram] || 0) + 1;
+  }
+  
+  const frequencies = Object.values(ngrams);
+  const repeated = frequencies.filter(f => f > 1).length;
+  const ngramRepetition = repeated / Object.keys(ngrams).length;
+  
+  return { ngramRepetition };
+}
+
+function extractStylometricFeatures(text) {
+  const words = text.split(/\s+/).filter(w => w.length > 0);
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  
+  const functionWords = new Set([
+    'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i',
+    'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at'
+  ]);
+  
+  const functionWordCount = words.filter(w => 
+    functionWords.has(w.toLowerCase())
+  ).length;
+  const functionWordRatio = functionWordCount / words.length;
+  
+  const punctuationMarks = text.match(/[.,;:!?]/g) || [];
+  const punctuationDiversity = new Set(punctuationMarks).size / Math.max(1, punctuationMarks.length);
+  
+  const starters = sentences.map(s => s.trim().split(/\s+/)[0]?.toLowerCase());
+  const uniqueStarters = new Set(starters.filter(Boolean));
+  const starterDiversity = uniqueStarters.size / Math.max(1, starters.length);
+  
+  const contractions = text.match(/\b\w+'\w+\b/g) || [];
+  const contractionRatio = contractions.length / words.length;
+  
+  const avgWordLength = words.reduce((sum, w) => sum + w.length, 0) / words.length;
+  
+  return {
+    functionWordRatio,
+    punctuationDiversity,
+    starterDiversity,
+    contractionRatio,
+    avgWordLength
+  };
+}
+
+function calculateCoherence(text) {
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  if (sentences.length < 2) return { coherenceScore: 0, transitionWordRatio: 0 };
+  
+  const transitions = [
+    'however', 'therefore', 'moreover', 'furthermore', 'consequently',
+    'meanwhile', 'nevertheless', 'thus', 'hence', 'additionally'
+  ];
+  
+  let transitionCount = 0;
+  const lowerText = text.toLowerCase();
+  transitions.forEach(trans => {
+    const regex = new RegExp(`\\b${trans}\\b`, 'gi');
+    const matches = lowerText.match(regex);
+    if (matches) transitionCount += matches.length;
+  });
+  
+  const transitionWordRatio = transitionCount / sentences.length;
+  
+  let overlapSum = 0;
+  for (let i = 0; i < sentences.length - 1; i++) {
+    const words1 = new Set(sentences[i].toLowerCase().split(/\s+/));
+    const words2 = new Set(sentences[i + 1].toLowerCase().split(/\s+/));
+    const intersection = new Set([...words1].filter(x => words2.has(x)));
+    const overlap = intersection.size / Math.max(words1.size, words2.size);
+    overlapSum += overlap;
+  }
+  
+  const coherenceScore = overlapSum / (sentences.length - 1);
+  
+  return { coherenceScore, transitionWordRatio };
+}
+
+function extractAcademicFeatures(text) {
+  const { perplexity, normalizedPerplexity } = calculatePerplexity(text);
+  const { burstiness, sentenceLengthVariance } = calculateBurstiness(text);
+  const { entropy, normalizedEntropy } = calculateEntropy(text);
+  const { ttr, mtld, vocdD } = calculateLexicalDiversity(text);
+  const bigrams = analyzeNGrams(text, 2);
+  const trigrams = analyzeNGrams(text, 3);
+  const stylometric = extractStylometricFeatures(text);
+  const coherence = calculateCoherence(text);
+  
+  const words = text.split(/\s+/).filter(w => w.length > 0);
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  
+  return [
+    normalizedPerplexity,
+    burstiness,
+    normalizedEntropy,
+    mtld,
+    ttr,
+    vocdD,
+    bigrams.ngramRepetition,
+    trigrams.ngramRepetition,
+    stylometric.functionWordRatio,
+    stylometric.punctuationDiversity,
+    stylometric.starterDiversity,
+    stylometric.contractionRatio,
+    stylometric.avgWordLength,
+    coherence.coherenceScore,
+    coherence.transitionWordRatio,
+    Math.log1p(text.length),
+    Math.log1p(words.length),
+    Math.log1p(sentences.length),
+    sentenceLengthVariance
+  ];
+}
+
 function loadDataFromDB(dbPath) {
   const db = new Database(dbPath);
   const rows = db.prepare('SELECT * FROM data').all();
@@ -11,152 +222,81 @@ function loadDataFromDB(dbPath) {
   return rows;
 }
 
-// Apply log1p transform to length features and prepare features for scaling
-function transformFeatures(row) {
-  // Apply log1p to length-based features
-  const text_length = Math.log1p(parseFloat(row.text_length));
-  const word_count = Math.log1p(parseFloat(row.word_count));
-  const num_sentences = Math.log1p(parseFloat(row.num_sentences));
-  
-  return [
-    text_length,
-    word_count,
-    parseFloat(row.avg_word_length),
-    num_sentences,
-    parseFloat(row.punctuation_density),
-    parseFloat(row.readability_score),
-    parseFloat(row.phrase_repetition || 0),
-    parseFloat(row.sentence_complexity || 0),
-    parseFloat(row.sentence_diversity || 0)
-  ];
-}
-
-// Preprocess data with log-transformed features and scaling
 async function preprocessData(data) {
-  // Filter out rows with missing or invalid data
+  console.log('Extracting research-based linguistic features...\n');
+  
   const validData = [];
   const featureArray = [];
   
-  // First pass: transform features and collect valid data
   for (const row of data) {
     try {
       const generatedValue = Number(row.generated);
-      if (isNaN(generatedValue) || (generatedValue !== 0 && generatedValue !== 1)) {
-        continue;
-      }
+      if (isNaN(generatedValue) || (generatedValue !== 0 && generatedValue !== 1)) continue;
       
-      const features = transformFeatures(row);
-      if (features.every(val => !isNaN(val))) {
-        validData.push({
-          features,
-          label: generatedValue
-        });
+      const features = extractAcademicFeatures(row.text || '');
+      if (features.every(val => !isNaN(val) && isFinite(val))) {
+        validData.push({ features, label: generatedValue });
         featureArray.push(features);
       }
     } catch (e) {
-      console.warn('Error processing row:', e);
+      console.warn('Error processing row:', e.message);
     }
   }
   
-  console.log(`Filtered ${data.length - validData.length} invalid rows`);
-  console.log(`Using ${validData.length} valid samples\n`);
+  console.log(`Valid samples: ${validData.length}/${data.length}\n`);
   
-  if (validData.length === 0) {
-    throw new Error('No valid samples found in the dataset after preprocessing');
-  }
-  
-  // Convert to tensors
   const featureTensor = tf.tensor2d(featureArray);
-  
-  // Calculate mean and std for z-score normalization
   const mean = featureTensor.mean(0);
   const std = tf.sqrt(featureTensor.sub(mean).square().mean(0));
+  const normalized = featureTensor.sub(mean).div(std.add(1e-7)).clipByValue(-10, 10);
   
-  // Apply z-score normalization with clipping to prevent extreme values
-  const normalizedFeatures = featureTensor.sub(mean).div(std.add(1e-7));
-  
-  // Clip values to reasonable range to prevent numerical instability
-  const clippedFeatures = normalizedFeatures.clipByValue(-10, 10);
-  
-  // Get the normalized features as an array
-  const normalizedArray = await clippedFeatures.array();
-  
-  // Clean up intermediate tensors
-  featureTensor.dispose();
-  normalizedFeatures.dispose();
-  clippedFeatures.dispose();
-  
-  // Prepare final dataset
-  const features = normalizedArray;
+  const features = await normalized.array();
   const labels = validData.map(row => row.label);
   
-  // Log feature statistics
-  console.log('Feature Statistics (after normalization):');
-  const featureNames = [
-    'text_length_log', 'word_count_log', 'avg_word_length',
-    'num_sentences_log', 'punctuation_density', 'readability_score',
-    'phrase_repetition', 'sentence_complexity', 'sentence_diversity'
-  ];
+  featureTensor.dispose();
+  normalized.dispose();
   
-  const means = await mean.array();
-  const stds = await std.array();
-  
-  // Log statistics
-  featureNames.forEach((name, i) => {
-    console.log(`${name}: mean=${means[i].toFixed(4)}, std=${stds[i].toFixed(4)}`);
-  });
-  console.log('');
-  
-  // Return both the normalized features and the normalization parameters
   return {
     features: tf.tensor2d(features),
     labels: tf.tensor2d(labels, [labels.length, 1]),
     mean,
     std,
-    featureNames
+    featureNames: [
+      'perplexity', 'burstiness', 'entropy', 'lexicalDiversity',
+      'typeTokenRatio', 'vocabularyRichness', 'bigramRepetition',
+      'trigramRepetition', 'functionWordRatio', 'punctuationDiversity',
+      'starterDiversity', 'contractionRatio', 'avgWordLength',
+      'coherenceScore', 'transitionWordRatio', 'textLength',
+      'wordCount', 'sentenceCount', 'sentenceLengthVariance'
+    ]
   };
 }
 
-// Create and compile the model
 function createModel() {
   const model = tf.sequential();
   
-  // Input layer with lighter L2 regularization
   model.add(tf.layers.dense({
-    inputShape: [9],
+    inputShape: [19],
     units: 64,
     activation: 'relu',
-    kernelInitializer: 'glorotUniform',
-    kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-    biasRegularizer: tf.regularizers.l2({ l2: 0.01 })
+    kernelRegularizer: tf.regularizers.l2({ l2: 0.01 })
   }));
-  
   model.add(tf.layers.dropout({ rate: 0.3 }));
   
-  // Hidden layers with decreasing units
-  [32, 16].forEach(units => {
-    model.add(tf.layers.dense({
-      units,
-      activation: 'relu',
-      kernelInitializer: 'glorotUniform',
-      kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-      biasRegularizer: tf.regularizers.l2({ l2: 0.01 })
-    }));
-    model.add(tf.layers.dropout({ rate: 0.2 }));
-  });
+  model.add(tf.layers.dense({
+    units: 32,
+    activation: 'relu',
+    kernelRegularizer: tf.regularizers.l2({ l2: 0.01 })
+  }));
+  model.add(tf.layers.dropout({ rate: 0.2 }));
   
-  // Output layer with sigmoid activation for binary classification
   model.add(tf.layers.dense({
     units: 1,
-    activation: 'sigmoid',
-    kernelInitializer: 'glorotNormal'
+    activation: 'sigmoid'
   }));
   
-  // Use Adam optimizer with lower learning rate
-  const optimizer = tf.train.adam(0.0001);
-  
   model.compile({
-    optimizer,
+    optimizer: tf.train.adam(0.001),
     loss: 'binaryCrossentropy',
     metrics: ['accuracy']
   });
@@ -164,258 +304,69 @@ function createModel() {
   return model;
 }
 
-// Train model with early stopping and learning rate scheduling
 async function trainModel(model, features, labels) {
-  console.log('Training model...\n');
+  console.log('Training model with academic features...\n');
   
-  // Calculate class weights to handle imbalance
-  const labelArray = await labels.array();
-  const aiCount = labelArray.flat().filter(x => x === 1).length;
-  const humanCount = labelArray.flat().filter(x => x === 0).length;
-  const total = aiCount + humanCount;
-  
-  // More balanced class weights
-  const classWeight = {
-    0: (total / (2 * humanCount)) * 1.1,
-    1: total / (2 * aiCount)
-  };
-  
-  console.log(`Class distribution: ${humanCount} human, ${aiCount} AI`);
-  console.log(`Class weights: Human=${classWeight[0].toFixed(2)}, AI=${classWeight[1].toFixed(2)}\n`);
-  
-  // Track best validation loss for early stopping
-  let bestValLoss = Infinity;
-  let patienceCount = 0;
-  const patience = 15;
-  
-  // Learning rate scheduling variables
-  let currentLr = 0.0001;
-  const minLr = 1e-7;
-  let reduceLrPatience = 0;
-  const reduceLrPatienceMax = 5;
-  
-  // Training parameters
-  const batchSize = 32;
-  const valSplit = 0.2;
-  const numEpochs = 100;
-  
-  // Split data into training and validation sets
-  const splitIndex = Math.floor(features.shape[0] * (1 - valSplit));
-  const trainFeatures = features.slice(0, splitIndex);
-  const trainLabels = labels.slice(0, splitIndex);
-  const valFeatures = features.slice(splitIndex);
-  const valLabels = labels.slice(splitIndex);
-  
-  const numBatches = Math.ceil(trainFeatures.shape[0] / batchSize);
-  
-  const history = {
-    loss: [],
-    val_loss: [],
-    acc: [],
-    val_acc: []
-  };
-  
-  for (let epoch = 0; epoch < numEpochs; epoch++) {
-    // Shuffle the training data
-    const indices = tf.util.createShuffledIndices(trainFeatures.shape[0]);
-    const indicesTensor = tf.tensor1d(Array.from(indices), 'int32');
-    const shuffledFeatures = trainFeatures.gather(indicesTensor);
-    const shuffledLabels = trainLabels.gather(indicesTensor);
-    
-    // Clean up the indices tensor
-    indicesTensor.dispose();
-    
-    let epochLoss = 0;
-    let epochAcc = 0;
-    
-    // Training loop
-    for (let i = 0; i < numBatches; i++) {
-      const startIdx = i * batchSize;
-      const batchSize_actual = Math.min(batchSize, trainFeatures.shape[0] - startIdx);
-      
-      const batchX = shuffledFeatures.slice(startIdx, batchSize_actual);
-      const batchY = shuffledLabels.slice(startIdx, batchSize_actual);
-      
-      // trainOnBatch can return tensors or numbers depending on tfjs version
-      const result = await model.trainOnBatch(batchX, batchY);
-      
-      // Handle return value - check if it's a tensor or plain value
-      if (Array.isArray(result)) {
-        // Array of values (could be tensors or numbers)
-        if (result[0] && typeof result[0].data === 'function') {
-          // Tensors
-          epochLoss += (await result[0].data())[0];
-          if (result.length > 1) {
-            epochAcc += (await result[1].data())[0];
-          }
-          result.forEach(t => t.dispose());
-        } else {
-          // Plain numbers
-          epochLoss += result[0];
-          if (result.length > 1) {
-            epochAcc += result[1];
-          }
-        }
-      } else {
-        // Single value (could be tensor or number)
-        if (result && typeof result.data === 'function') {
-          // Tensor
-          epochLoss += (await result.data())[0];
-          result.dispose();
-        } else {
-          // Plain number
-          epochLoss += result;
+  const history = await model.fit(features, labels, {
+    epochs: 50,
+    batchSize: 32,
+    validationSplit: 0.2,
+    callbacks: {
+      onEpochEnd: (epoch, logs) => {
+        if ((epoch + 1) % 5 === 0) {
+          console.log(`Epoch ${epoch + 1}: loss=${logs.loss.toFixed(4)}, ` +
+                     `acc=${logs.acc.toFixed(4)}, val_loss=${logs.val_loss.toFixed(4)}, ` +
+                     `val_acc=${logs.val_acc.toFixed(4)}`);
         }
       }
-      
-      // Clean up batch tensors
-      tf.dispose([batchX, batchY]);
     }
-    
-    // Calculate validation metrics
-    const valResults = model.evaluate(valFeatures, valLabels, {batchSize: 32});
-    
-    let valLossValue, valAccValue;
-    if (Array.isArray(valResults)) {
-      valLossValue = (await valResults[0].data())[0];
-      valAccValue = valResults.length > 1 ? (await valResults[1].data())[0] : 0;
-      // Dispose the result tensors
-      valResults.forEach(t => t.dispose());
-    } else {
-      valLossValue = (await valResults.data())[0];
-      valAccValue = 0;
-      valResults.dispose();
-    }
-    
-    // Update history
-    const avgLoss = epochLoss / numBatches;
-    const avgAcc = epochAcc / numBatches;
-    
-    history.loss.push(avgLoss);
-    history.acc.push(avgAcc);
-    history.val_loss.push(valLossValue);
-    history.val_acc.push(valAccValue);
-    
-    // Check for NaN values in both loss and weights
-    if (isNaN(avgLoss) || isNaN(valLossValue)) {
-      console.log('\n❌ NaN detected during training! Stopping...');
-      console.log(`Epoch ${epoch + 1}: loss=${avgLoss}, val_loss=${valLossValue}`);
-      tf.dispose([shuffledFeatures, shuffledLabels]);
-      break;
-    }
-    
-    // Early stopping and learning rate adjustment
-    if (valLossValue < bestValLoss) {
-      bestValLoss = valLossValue;
-      patienceCount = 0;
-      reduceLrPatience = 0;
-    } else {
-      patienceCount++;
-      reduceLrPatience++;
-      
-      // Reduce learning rate on plateau
-      if (reduceLrPatience >= reduceLrPatienceMax && currentLr > minLr) {
-        const oldLr = currentLr;
-        currentLr = Math.max(minLr, currentLr * 0.5);
-        console.log(`\nReducing learning rate from ${oldLr.toExponential(2)} to ${currentLr.toExponential(2)}`);
-        
-        // Create new optimizer with updated learning rate
-        const newOptimizer = tf.train.adam(currentLr);
-        model.compile({
-          optimizer: newOptimizer,
-          loss: 'binaryCrossentropy',
-          metrics: ['accuracy']
-        });
-        reduceLrPatience = 0;
-      }
-      
-      // Early stopping
-      if (patienceCount >= patience) {
-        console.log(`\nEarly stopping after ${patience} epochs without improvement`);
-        tf.dispose([shuffledFeatures, shuffledLabels]);
-        break;
-      }
-    }
-    
-    // Log progress every 5 epochs or on the last epoch
-    if ((epoch + 1) % 5 === 0 || epoch === numEpochs - 1) {
-      console.log(`Epoch ${epoch + 1}/${numEpochs} - ` +
-                 `loss: ${avgLoss.toFixed(4)}, acc: ${avgAcc.toFixed(4)}, ` +
-                 `val_loss: ${valLossValue.toFixed(4)}, val_acc: ${valAccValue.toFixed(4)}, ` +
-                 `lr: ${currentLr.toExponential(2)}`);
-    }
-    
-    // Clean up
-    tf.dispose([shuffledFeatures, shuffledLabels]);
-  }
-  
-  // Clean up
-  tf.dispose([trainFeatures, trainLabels, valFeatures, valLabels]);
+  });
   
   return history;
 }
 
-// Save normalization parameters
-function saveNormalization(mean, std, featureNames, outputPath = './model') {
-  if (!fs.existsSync(outputPath)) {
-    fs.mkdirSync(outputPath, { recursive: true });
+async function main() {
+  const DB_PATH = 'AiHumanTextCombined.db';
+  const MODEL_DIR = './model-academic';
+  
+  console.log('═══════════════════════════════════════════════════');
+  console.log('  AI Text Detector - Academic Implementation');
+  console.log('  Based on: ACL 2025 GenAI Detection Research');
+  console.log('═══════════════════════════════════════════════════\n');
+  
+  const data = loadDataFromDB(DB_PATH);
+  console.log(`Loaded ${data.length} samples\n`);
+  
+  const { features, labels, mean, std, featureNames } = await preprocessData(data);
+  
+  console.log('Creating model...');
+  const model = createModel();
+  model.summary();
+  
+  await trainModel(model, features, labels);
+  
+  console.log('\nSaving model...');
+  if (!fs.existsSync(MODEL_DIR)) {
+    fs.mkdirSync(MODEL_DIR, { recursive: true });
   }
+  
+  await model.save(`file://${MODEL_DIR}`);
   
   const normData = {
     mean: Array.from(mean.dataSync()),
     std: Array.from(std.dataSync()),
-    featureNames,
-    timestamp: new Date().toISOString()
+    featureNames
   };
+  fs.writeFileSync(`${MODEL_DIR}/normalization.json`, JSON.stringify(normData, null, 2));
   
-  fs.writeFileSync(
-    `${outputPath}/normalization.json`,
-    JSON.stringify(normData, null, 2)
-  );
-}
-
-// Main training function
-async function main() {
-  const DB_PATH = 'AiHumanTextCombined.db';
-  const MODEL_DIR = './model';
+  console.log(`\n✅ Model saved to ${MODEL_DIR}`);
+  console.log('\nFeatures used:');
+  featureNames.forEach((name, i) => console.log(`  ${i + 1}. ${name}`));
   
-  try {
-    console.log('Loading data from database...');
-    const data = loadDataFromDB(DB_PATH);
-    console.log(`Loaded ${data.length} samples\n`);
-    
-    console.log('Preprocessing data...');
-    const { features, labels, mean, std, featureNames } = await preprocessData(data);
-    
-    console.log('Creating model...');
-    const model = createModel();
-    model.summary();
-    console.log('');
-    
-    console.log('Starting training...');
-    await trainModel(model, features, labels);
-    
-    console.log('\nSaving model and normalization parameters...');
-    if (!fs.existsSync(MODEL_DIR)) {
-      fs.mkdirSync(MODEL_DIR, { recursive: true });
-    }
-    
-    await model.save(`file://${MODEL_DIR}`);
-    saveNormalization(mean, std, featureNames, MODEL_DIR);
-    
-    console.log('\n✅ Training completed successfully!');
-    console.log(`Model and normalization data saved to ${MODEL_DIR}`);
-    
-    // Cleanup
-    features.dispose();
-    labels.dispose();
-    mean.dispose();
-    std.dispose();
-    
-  } catch (error) {
-    console.error('\n❌ Error during training:', error);
-    process.exit(1);
-  }
+  features.dispose();
+  labels.dispose();
+  mean.dispose();
+  std.dispose();
 }
 
 main().catch(console.error);
